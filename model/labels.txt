@@ -1,0 +1,4 @@
+0 eating
+1 sleeping
+2 land_activity
+3 water_activity

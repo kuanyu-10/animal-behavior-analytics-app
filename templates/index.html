@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+
+    <title>動物行動ログ分析・可視化アプリ</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>動物行動ログ分析・可視化アプリ</h1>
+
+        <p>
+            カピバラの画像をアップロードし、
+            AIが行動を判定します。
+        </p>
+
+        {% if message %}
+        <div class="message">
+            {{ message }}
+        </div>
+        {% endif %}
+
+        <form action="/upload" method="POST" enctype="multipart/form-data">
+            <input type="file" name="image" accept="image/*" required>
+            <br><br>
+            <button type="submit">画像をアップロード</button>
+        </form>
+
+        {% if image_url %}
+        <div class="preview">
+            <h2>アップロード画像</h2>
+            <img src="{{ image_url }}" alt="アップロード画像">
+        </div>
+        {% endif %}
+
+        {% if label %}
+        <div class="result">
+            <h2>判定結果</h2>
+
+            <p>
+                行動：
+                <strong>{{ label }}</strong>
+            </p>
+
+            <p>
+                信頼度：
+                <strong>{{ "%.2f"|format(confidence*100) }}%</strong>
+            </p>
+        </div>
+        {% endif %}
+
+        {% if behavior_summary %}
+        <div class="dashboard-section">
+            <h2>行動サマリー</h2>
+
+            <div class="summary-grid">
+                {% for behavior, count in behavior_summary.items() %}
+                <div class="summary-card">
+                    <p>{{ behavior }}</p>
+                    <strong>{{ count }}件</strong>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if behavior_summary %}
+        <div class="chart-section">
+            <h2>行動割合チャート</h2>
+            <canvas id="behaviorChart"></canvas>
+        </div>
+        {% endif %}
+
+        {% if abnormal_message %}
+        <div class="abnormal-section">
+            <h2>異常傾向分析</h2>
+            <p>{{ abnormal_message }}</p>
+        </div>
+        {% endif %}
+
+        {% if recent_logs %}
+        <div class="log-section">
+            <h2>最近の行動ログ</h2>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>日時</th>
+                        <th>行動</th>
+                        <th>信頼度</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for log in recent_logs %}
+                    <tr>
+                        <td>{{ log.datetime }}</td>
+                        <td>{{ log.behavior }}</td>
+                        <td>{{ log.confidence }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+    </div>
+
+    <script>
+        const behaviorSummary = {{ behavior_summary | tojson }};
+        const labels = Object.keys(behaviorSummary);
+        const values = Object.values(behaviorSummary);
+
+        const ctx = document.getElementById("behaviorChart");
+
+        new Chart(ctx, {
+            type: "pie",
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values
+                }]
+            }
+        });
+    </script>
+
+</body>
+
+</html>
