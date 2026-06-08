@@ -1,8 +1,11 @@
 .venv/
 .env
+
 logs/*
 !logs/.gitkeep
+
 static/frames/
 static/videos/
+
 __pycache__/
 *.pyc
