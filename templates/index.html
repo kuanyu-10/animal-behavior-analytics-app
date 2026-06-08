@@ -17,7 +17,7 @@
         <h1>動物行動ログ分析・可視化アプリ</h1>
 
         <p>
-            カピバラの画像をアップロードし、
+            カピバラの画像・動画をアップロードし、
             AIが行動を判定します。
         </p>
 
@@ -27,33 +27,118 @@
         </div>
         {% endif %}
 
-        <form action="/upload" method="POST" enctype="multipart/form-data">
-            <input type="file" name="image" accept="image/*" required>
-            <br><br>
-            <button type="submit">画像をアップロード</button>
+        <form
+            action="/session"
+            method="POST"
+            enctype="multipart/form-data">
+
+            <div class="session-section">
+
+                <h2>
+                    観察セッション
+                </h2>
+
+                <div class="session-form">
+
+                    <label>
+                        個体ID
+                    </label>
+
+                    <input
+                        type="text"
+                        name="animal_id"
+                        placeholder="Capybara-01"
+                        required>
+
+                    <label>
+                        観察開始日時
+                    </label>
+
+                    <input
+                        type="datetime-local"
+                        name="start_time"
+                        required>
+
+                    <label>
+                        フレーム抽出間隔（秒）
+                    </label>
+
+                    <input
+                        type="number"
+                        name="frame_interval"
+                        value="10"
+                        min="1"
+                        required>
+
+                    <label>
+                        観察動画
+                    </label>
+
+                    <input
+                        type="file"
+                        name="video"
+                        accept="video/*"
+                        required>
+
+                    <button type="submit">
+                        セッション開始
+                    </button>
+
+                </div>
+
+            </div>
+
         </form>
 
-        {% if image_url %}
-        <div class="preview">
-            <h2>アップロード画像</h2>
-            <img src="{{ image_url }}" alt="アップロード画像">
-        </div>
-        {% endif %}
+        {% if animal_id %}
 
-        {% if label %}
         <div class="result">
-            <h2>判定結果</h2>
+
+            <h2>
+                現在の観察セッション
+            </h2>
 
             <p>
-                行動：
-                <strong>{{ label }}</strong>
+                個体ID：
+                <strong>
+                    {{ animal_id }}
+                </strong>
             </p>
 
             <p>
-                信頼度：
-                <strong>{{ "%.2f"|format(confidence*100) }}%</strong>
+                観察開始：
+                <strong>
+                    {{ start_time }}
+                </strong>
             </p>
+
+            <p>
+                フレーム抽出間隔：
+                <strong>
+                    {{ frame_interval }}秒
+                </strong>
+            </p>
+
+            {% if video_filename %}
+            <p>
+                動画ファイル：
+                <strong>
+                    {{ video_filename }}
+                </strong>
+            </p>
+            {% endif %}
+
+            {% if frame_count %}
+            <p>
+                抽出フレーム数：
+                <strong>
+                    {{ frame_count }}枚
+                </strong>
+            </p>
+            {% endif %}
+
         </div>
+
         {% endif %}
 
         {% if behavior_summary %}
@@ -78,10 +163,77 @@
         </div>
         {% endif %}
 
+        {% if animal_behavior_summary %}
+<div class="log-section">
+    <h2>個体別行動サマリー</h2>
+
+    <table>
+        <thead>
+            <tr>
+                <th>個体ID</th>
+                <th>睡眠</th>
+                <th>食事</th>
+                <th>陸上活動</th>
+                <th>水中活動</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            {% for animal_id, summary in animal_behavior_summary.items() %}
+            <tr>
+                <td>{{ animal_id }}</td>
+                <td>{{ summary["睡眠"] }}件</td>
+                <td>{{ summary["食事"] }}件</td>
+                <td>{{ summary["陸上活動"] }}件</td>
+                <td>{{ summary["水中活動"] }}件</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+        {% if behavior_timeline %}
+        <div class="timeline-section">
+            <h2>行動タイムライン</h2>
+
+            <div class="timeline-list">
+                {% for log in behavior_timeline %}
+                <div class="timeline-item">
+                    <span class="timeline-time">{{ log.datetime }}</span>
+                    <span class="timeline-behavior">{{ log.behavior }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         {% if abnormal_message %}
         <div class="abnormal-section">
             <h2>異常傾向分析</h2>
             <p>{{ abnormal_message }}</p>
+        </div>
+        {% endif %}
+
+        {% if behavior_summary %}
+        <form action="/generate-report" method="POST">
+            <button type="submit">
+                AI観察レポート生成
+            </button>
+        </form>
+        {% endif %}
+
+        <form action="/clear-logs" method="POST"onsubmit="return confirm('現在の行動ログを削除します。よろしいですか？');">
+            <button type="submit">
+                現在の記録を削除
+            </button>
+        </form>
+
+        {% if ai_report %}
+        <div class="report-section">
+            <h2>AI観察レポート</h2>
+
+            <pre>{{ ai_report }}</pre>
         </div>
         {% endif %}
 
@@ -93,6 +245,8 @@
                 <thead>
                     <tr>
                         <th>日時</th>
+                        <th>個体ID</th>
+                        <th>観察開始</th>
                         <th>行動</th>
                         <th>信頼度</th>
                     </tr>
@@ -102,6 +256,8 @@
                     {% for log in recent_logs %}
                     <tr>
                         <td>{{ log.datetime }}</td>
+                        <td>{{ log.animal_id }}</td>
+                        <td>{{ log.start_time }}</td>
                         <td>{{ log.behavior }}</td>
                         <td>{{ log.confidence }}%</td>
                     </tr>
@@ -113,22 +269,30 @@
 
     </div>
 
+    <script type="application/json" id="behavior-summary-data">
+        {{ behavior_summary | tojson }}
+    </script>
+
     <script>
-        const behaviorSummary = {{ behavior_summary | tojson }};
+        const behaviorSummaryElement = document.getElementById("behavior-summary-data");
+        const behaviorSummary = JSON.parse(behaviorSummaryElement.textContent);
+
         const labels = Object.keys(behaviorSummary);
         const values = Object.values(behaviorSummary);
 
         const ctx = document.getElementById("behaviorChart");
 
-        new Chart(ctx, {
-            type: "pie",
-            data: {
-                labels: labels,
-                datasets: [{
-                    data: values
-                }]
-            }
-        });
+        if (ctx) {
+            new Chart(ctx, {
+                type: "pie",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: values
+                    }]
+                }
+            });
+        }
     </script>
 
 </body>
