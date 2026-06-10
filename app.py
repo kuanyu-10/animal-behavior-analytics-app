@@ -210,10 +210,18 @@ def extract_frames_from_video(video_path, frame_interval):
 
     fps = video.get(cv2.CAP_PROP_FPS)
 
+    if fps == 0:
+        fps = 30
+
     interval_frames = int(fps * int(frame_interval))
+
+    if interval_frames <= 0:
+        interval_frames = 1
 
     frame_number = 0
     saved_frames = []
+
+    max_frames = 10
 
     while True:
         success, frame = video.read()
@@ -236,6 +244,9 @@ def extract_frames_from_video(video_path, frame_interval):
                 "frame_number": frame_number,
                 "fps": fps
             })
+
+            if len(saved_frames) >= max_frames:
+                break
 
         frame_number += 1
 
