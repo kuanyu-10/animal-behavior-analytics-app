@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
 
-    <title>動物行動ログ分析・可視化アプリ</title>
+    <title>動物行動ログ分析・可視化システム</title>
 
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -14,11 +14,11 @@
 
     <div class="container">
 
-        <h1>動物行動ログ分析・可視化アプリ</h1>
+        <h1>動物行動ログ分析・可視化システム</h1>
 
         <p>
-            カピバラの画像・動画をアップロードし、
-            AIが行動を判定します。
+            AIによる画像解析・個体別行動ログ管理・可視化ダッシュボードを通じて、
+            動物園や研究施設の観察業務を支援します。
         </p>
 
         {% if message %}
@@ -28,21 +28,18 @@
         {% endif %}
 
         <form
-            action="/session"
+            action="/image-session"
             method="POST"
-            enctype="multipart/form-data">
+            enctype="multipart/form-data"
+            onsubmit="this.querySelector('button[type=submit]').disabled = true;">
 
             <div class="session-section">
 
-                <h2>
-                    観察セッション
-                </h2>
+                <h2>観察セッション</h2>
 
                 <div class="session-form">
 
-                    <label>
-                        個体ID
-                    </label>
+                    <label>個体ID</label>
 
                     <input
                         type="text"
@@ -50,38 +47,39 @@
                         placeholder="Capybara-01"
                         required>
 
-                    <label>
-                        観察開始日時
-                    </label>
+                    <label>観察開始日時</label>
 
                     <input
                         type="datetime-local"
                         name="start_time"
                         required>
 
-                    <label>
-                        フレーム抽出間隔（秒）
-                    </label>
+                    <label>画像間隔（分）</label>
 
                     <input
                         type="number"
-                        name="frame_interval"
+                        name="interval_minutes"
                         value="10"
-                        min="1"
+                        min="0"
                         required>
 
-                    <label>
-                        観察動画
-                    </label>
+                    <label>観察画像（複数選択可）</label>
 
                     <input
                         type="file"
-                        name="video"
-                        accept="video/*"
+                        id="imageInput"
+                        name="images"
+                        accept="image/*"
+                        onchange="previewImages(event)"
+                        multiple
                         required>
 
+                    <div class="preview">
+                        <div id="previewArea"></div>
+                    </div>
+
                     <button type="submit">
-                        セッション開始
+                        AI画像解析
                     </button>
 
                 </div>
@@ -90,64 +88,75 @@
 
         </form>
 
-        {% if animal_id %}
+        {% if available_animals %}
+        <div class="session-section">
 
+            <h2>個体ID選択</h2>
+
+            <form action="/" method="GET">
+
+                <div class="session-form">
+
+                    <label>分析対象の個体ID</label>
+
+                    <select name="animal_id">
+                        <option value="all" {% if selected_animal_id == "all" %}selected{% endif %}>
+                            個体IDを選択してください
+                        </option>
+
+                        {% for animal in available_animals %}
+                        <option value="{{ animal }}" {% if selected_animal_id == animal %}selected{% endif %}>
+                            {{ animal }}
+                        </option>
+                        {% endfor %}
+                    </select>
+
+                    <button type="submit">
+                        個体別ダッシュボード表示
+                    </button>
+
+                </div>
+
+            </form>
+
+        </div>
+        {% endif %}
+
+        {% if animal_id %}
         <div class="result">
 
-            <h2>
-                現在の観察セッション
-            </h2>
+            <h2>現在の観察セッション</h2>
 
             <p>
                 個体ID：
-                <strong>
-                    {{ animal_id }}
-                </strong>
+                <strong>{{ animal_id }}</strong>
             </p>
 
             <p>
-                観察開始：
-                <strong>
-                    {{ start_time }}
-                </strong>
+                観察開始日時：
+                <strong>{{ start_time }}</strong>
             </p>
 
+            {% if session_id %}
             <p>
-                フレーム抽出間隔：
-                <strong>
-                    {{ frame_interval }}秒
-                </strong>
-            </p>
-
-            <p style="font-size:14px;color:#666;">
-            ※ デモ環境ではサーバー負荷を考慮し、最大10枚まで解析します。
-            </p>
-
-            {% if video_filename %}
-            <p>
-                動画ファイル：
-                <strong>
-                    {{ video_filename }}
-                </strong>
+                セッションID：
+                <strong>{{ session_id }}</strong>
             </p>
             {% endif %}
 
-            {% if frame_count %}
+            {% if image_filename %}
             <p>
-                抽出フレーム数：
-                <strong>
-                    {{ frame_count }}枚
-                </strong>
+                画像ファイル：
+                <strong>{{ image_filename }}</strong>
             </p>
             {% endif %}
 
         </div>
-
         {% endif %}
 
-        {% if behavior_summary %}
+        {% if selected_animal_id != "all" %}
         <div class="dashboard-section">
-            <h2>行動サマリー</h2>
+            <h2>個体別行動サマリー：{{ selected_animal_id }}</h2>
 
             <div class="summary-grid">
                 {% for behavior, count in behavior_summary.items() %}
@@ -158,48 +167,46 @@
                 {% endfor %}
             </div>
         </div>
-        {% endif %}
 
-        {% if behavior_summary %}
         <div class="chart-section">
-            <h2>行動割合チャート</h2>
+            <h2>個体別行動割合チャート：{{ selected_animal_id }}</h2>
             <canvas id="behaviorChart"></canvas>
         </div>
         {% endif %}
 
         {% if animal_behavior_summary %}
-<div class="log-section">
-    <h2>個体別行動サマリー</h2>
+        <div class="log-section">
+            <h2>個体別行動サマリー一覧</h2>
 
-    <table>
-        <thead>
-            <tr>
-                <th>個体ID</th>
-                <th>睡眠</th>
-                <th>食事</th>
-                <th>陸上活動</th>
-                <th>水中活動</th>
-            </tr>
-        </thead>
+            <table>
+                <thead>
+                    <tr>
+                        <th>個体ID</th>
+                        <th>睡眠</th>
+                        <th>食事</th>
+                        <th>陸上活動</th>
+                        <th>水中活動</th>
+                    </tr>
+                </thead>
 
-        <tbody>
-            {% for animal_id, summary in animal_behavior_summary.items() %}
-            <tr>
-                <td>{{ animal_id }}</td>
-                <td>{{ summary["睡眠"] }}件</td>
-                <td>{{ summary["食事"] }}件</td>
-                <td>{{ summary["陸上活動"] }}件</td>
-                <td>{{ summary["水中活動"] }}件</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-{% endif %}
+                <tbody>
+                    {% for animal_id, summary in animal_behavior_summary.items() %}
+                    <tr>
+                        <td>{{ animal_id }}</td>
+                        <td>{{ summary["睡眠"] }}件</td>
+                        <td>{{ summary["食事"] }}件</td>
+                        <td>{{ summary["陸上活動"] }}件</td>
+                        <td>{{ summary["水中活動"] }}件</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
 
-        {% if behavior_timeline %}
+        {% if selected_animal_id != "all" and behavior_timeline %}
         <div class="timeline-section">
-            <h2>行動タイムライン</h2>
+            <h2>個体別行動タイムライン：{{ selected_animal_id }}</h2>
 
             <div class="timeline-list">
                 {% for log in behavior_timeline %}
@@ -212,30 +219,40 @@
         </div>
         {% endif %}
 
-        {% if abnormal_message %}
+        {% if selected_animal_id != "all" %}
         <div class="abnormal-section">
-            <h2>異常傾向分析</h2>
+            <h2>個体別異常傾向分析：{{ selected_animal_id }}</h2>
             <p>{{ abnormal_message }}</p>
         </div>
         {% endif %}
 
-        {% if behavior_summary %}
+        {% if selected_animal_id != "all" %}
         <form action="/generate-report" method="POST">
+            <input
+                type="hidden"
+                name="selected_animal_id"
+                value="{{ selected_animal_id }}">
+
             <button type="submit">
                 AI観察レポート生成
             </button>
         </form>
         {% endif %}
 
-        <form action="/clear-logs" method="POST"onsubmit="return confirm('現在の行動ログを削除します。よろしいですか？');">
+        <form
+            action="/clear-logs"
+            method="POST"
+            onsubmit="return confirm('現在の行動ログを削除します。よろしいですか？');">
+
             <button type="submit">
                 現在の記録を削除
             </button>
+
         </form>
 
         {% if ai_report %}
         <div class="report-section">
-            <h2>AI観察レポート</h2>
+            <h2>AI観察レポート：{{ selected_animal_id }}</h2>
 
             <pre>{{ ai_report }}</pre>
         </div>
@@ -243,16 +260,17 @@
 
         {% if recent_logs %}
         <div class="log-section">
-            <h2>最近の行動ログ</h2>
+            <h2>最近の行動ログ・ラベル修正</h2>
 
             <table>
                 <thead>
                     <tr>
                         <th>日時</th>
                         <th>個体ID</th>
-                        <th>観察開始</th>
+                        <th>画像</th>
                         <th>行動</th>
                         <th>信頼度</th>
+                        <th>修正</th>
                     </tr>
                 </thead>
 
@@ -261,9 +279,34 @@
                     <tr>
                         <td>{{ log.datetime }}</td>
                         <td>{{ log.animal_id }}</td>
-                        <td>{{ log.start_time }}</td>
+                        <td>{{ log.image_name }}</td>
                         <td>{{ log.behavior }}</td>
                         <td>{{ log.confidence }}%</td>
+                        <td>
+                            <form action="/update-behavior" method="POST" class="inline-update-form">
+                                <input
+                                    type="hidden"
+                                    name="log_id"
+                                    value="{{ log.log_id }}">
+
+                                <input
+                                    type="hidden"
+                                    name="selected_animal_id"
+                                    value="{{ selected_animal_id }}">
+
+                                <select name="behavior">
+                                    {% for behavior in behavior_list %}
+                                    <option value="{{ behavior }}" {% if log.behavior == behavior %}selected{% endif %}>
+                                        {{ behavior }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+
+                                <button type="submit">
+                                    更新
+                                </button>
+                            </form>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -295,6 +338,26 @@
                         data: values
                     }]
                 }
+            });
+        }
+
+        function previewImages(event) {
+            const files = event.target.files;
+            const previewArea = document.getElementById("previewArea");
+
+            previewArea.innerHTML = "";
+
+            if (!files || files.length === 0) {
+                return;
+            }
+
+            Array.from(files).forEach(function(file) {
+                const img = document.createElement("img");
+
+                img.src = URL.createObjectURL(file);
+                img.alt = "画像プレビュー";
+
+                previewArea.appendChild(img);
             });
         }
     </script>

@@ -6,6 +6,7 @@ logs/*
 
 static/frames/
 static/videos/
+static/uploads/
 
 __pycache__/
 *.pyc

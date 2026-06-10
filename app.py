@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, redirect, url_for
 from tensorflow.keras.models import load_model
 from PIL import Image
 import numpy as np
@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from openai import OpenAI
 from dotenv import load_dotenv
 import sys
+import uuid
 
 app = Flask(__name__)
 
@@ -21,12 +22,16 @@ client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
+IMAGE_UPLOAD_FOLDER = "static/uploads"
 VIDEO_UPLOAD_FOLDER = "static/videos"
 FRAME_FOLDER = "static/frames"
+LOG_PATH = "logs/behavior_log.csv"
 
+app.config["IMAGE_UPLOAD_FOLDER"] = IMAGE_UPLOAD_FOLDER
 app.config["VIDEO_UPLOAD_FOLDER"] = VIDEO_UPLOAD_FOLDER
 app.config["FRAME_FOLDER"] = FRAME_FOLDER
 
+os.makedirs(IMAGE_UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(VIDEO_UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(FRAME_FOLDER, exist_ok=True)
 os.makedirs("logs", exist_ok=True)
@@ -37,34 +42,85 @@ with open("model/labels.txt", "r", encoding="utf-8") as f:
     labels = [line.strip() for line in f.readlines()]
 
 
+CSV_COLUMNS = [
+    "log_id",
+    "session_id",
+    "datetime",
+    "animal_id",
+    "image_name",
+    "behavior",
+    "confidence"
+]
+
+
+BEHAVIOR_LIST = [
+    "睡眠",
+    "食事",
+    "陸上活動",
+    "水中活動"
+]
+
+
+def read_behavior_logs():
+    if not os.path.exists(LOG_PATH):
+        return []
+
+    with open(LOG_PATH, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        logs = list(reader)
+
+    return logs
+
+
+def write_behavior_logs(logs):
+    with open(LOG_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+
+        writer.writeheader()
+
+        for log in logs:
+            writer.writerow(log)
+
+
+def get_available_animals():
+    logs = read_behavior_logs()
+    animal_ids = []
+
+    for log in logs:
+        animal_id = log["animal_id"]
+
+        if animal_id not in animal_ids:
+            animal_ids.append(animal_id)
+
+    return animal_ids
+
+
+def filter_logs_by_animal(logs, selected_animal_id):
+    if selected_animal_id == "all":
+        return logs
+
+    return [
+        log for log in logs
+        if log["animal_id"] == selected_animal_id
+    ]
+
+
 def get_recent_logs():
-    log_path = "logs/behavior_log.csv"
+    logs = read_behavior_logs()
 
-    if not os.path.exists(log_path):
-        return []
-
-    with open(log_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        logs = list(reader)
-
-    return logs[-5:]
+    return logs[-8:]
 
 
-def get_behavior_timeline():
-    log_path = "logs/behavior_log.csv"
+def get_behavior_timeline(selected_animal_id="all"):
+    logs = read_behavior_logs()
+    filtered_logs = filter_logs_by_animal(logs, selected_animal_id)
 
-    if not os.path.exists(log_path):
-        return []
-
-    with open(log_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        logs = list(reader)
-
-    return logs[-10:]
+    return filtered_logs[-12:]
 
 
-def get_behavior_summary():
-    log_path = "logs/behavior_log.csv"
+def get_behavior_summary(selected_animal_id="all"):
+    logs = read_behavior_logs()
+    filtered_logs = filter_logs_by_animal(logs, selected_animal_id)
 
     summary = {
         "睡眠": 0,
@@ -73,47 +129,37 @@ def get_behavior_summary():
         "水中活動": 0
     }
 
-    if not os.path.exists(log_path):
-        return summary
+    for log in filtered_logs:
+        behavior = log["behavior"]
 
-    with open(log_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-
-        for row in reader:
-            behavior = row["behavior"]
-
-            if behavior in summary:
-                summary[behavior] += 1
+        if behavior in summary:
+            summary[behavior] += 1
 
     return summary
 
+
 def get_animal_behavior_summary():
-    log_path = "logs/behavior_log.csv"
+    logs = read_behavior_logs()
 
     animal_summary = {}
 
-    if not os.path.exists(log_path):
-        return animal_summary
+    for log in logs:
+        animal_id = log["animal_id"]
+        behavior = log["behavior"]
 
-    with open(log_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        if animal_id not in animal_summary:
+            animal_summary[animal_id] = {
+                "睡眠": 0,
+                "食事": 0,
+                "陸上活動": 0,
+                "水中活動": 0
+            }
 
-        for row in reader:
-            animal_id = row["animal_id"]
-            behavior = row["behavior"]
-
-            if animal_id not in animal_summary:
-                animal_summary[animal_id] = {
-                    "睡眠": 0,
-                    "食事": 0,
-                    "陸上活動": 0,
-                    "水中活動": 0
-                }
-
-            if behavior in animal_summary[animal_id]:
-                animal_summary[animal_id][behavior] += 1
+        if behavior in animal_summary[animal_id]:
+            animal_summary[animal_id][behavior] += 1
 
     return animal_summary
+
 
 def analyze_abnormal_behavior(summary):
     total = sum(summary.values())
@@ -155,7 +201,12 @@ def create_summary_text(summary):
     return summary_text
 
 
-def create_observation_prompt(summary, abnormal_message, animal_behavior_summary):
+def create_observation_prompt(
+    summary,
+    abnormal_message,
+    animal_behavior_summary,
+    selected_animal_id
+):
     summary_text = create_summary_text(summary)
 
     prompt = f"""
@@ -165,6 +216,9 @@ def create_observation_prompt(summary, abnormal_message, animal_behavior_summary
 対象動物：
 カピバラ
 
+対象個体ID：
+{selected_animal_id}
+
 このレポートは飼育員や研究担当者が
 日々の行動傾向を把握するために利用します。
 
@@ -173,11 +227,31 @@ def create_observation_prompt(summary, abnormal_message, animal_behavior_summary
 
 条件：
 
+・選択された個体IDの行動傾向を中心に説明する
 ・観察結果を要約する
 ・行動割合から考えられる傾向を説明する
 ・異常の可能性がある場合は断定しない
 ・必要に応じて継続観察を提案する
 ・読みやすい文章で作成する
+・専門的すぎる表現は避ける
+・飼育員がすぐ確認できるように簡潔にまとめる
+
+出力形式：
+
+【観察概要】
+全体の行動傾向を2〜3文で要約してください。
+
+【行動傾向】
+睡眠、食事、陸上活動、水中活動の割合から読み取れる傾向を説明してください。
+
+【異常傾向の確認】
+異常の可能性がある場合は断定せず、「可能性があります」「継続観察が必要です」のように表現してください。
+
+【個体別コメント】
+対象個体IDの特徴を簡潔に説明してください。
+
+【今後の観察ポイント】
+次回以降、飼育員が確認すべきポイントを箇条書きで3つ以内にまとめてください。
 
 【行動ログ集計】
 {summary_text}
@@ -194,15 +268,51 @@ def create_observation_prompt(summary, abnormal_message, animal_behavior_summary
 
 def generate_ai_report(prompt):
     try:
-        response = client.responses.create(
-            model="gpt-5",
-            input=prompt
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "あなたは動物園や研究機関向けに、カピバラの行動ログをもとに観察レポートを作成するAIアシスタントです。異常の可能性については断定せず、継続観察を前提に簡潔な日本語で説明してください。"
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         )
 
-        return response.output_text
+        return response.choices[0].message.content
 
     except Exception as e:
         return f"AIレポート生成エラー: {str(e)}"
+
+
+def predict_behavior(image_path):
+    img = Image.open(image_path).convert("RGB")
+    img = img.resize((224, 224))
+    img = np.array(img)
+    img = img.astype(np.float32)
+    img = img / 255.0
+    img = np.expand_dims(img, axis=0)
+
+    prediction = model.predict(img)
+
+    index = np.argmax(prediction)
+    confidence = prediction[0][index]
+
+    english_label = labels[index].split(" ", 1)[1]
+
+    label_map = {
+        "sleeping": "睡眠",
+        "eating": "食事",
+        "land_activity": "陸上活動",
+        "water_activity": "水中活動"
+    }
+
+    label = label_map[english_label]
+
+    return label, confidence
 
 
 def extract_frames_from_video(video_path, frame_interval):
@@ -220,7 +330,6 @@ def extract_frames_from_video(video_path, frame_interval):
 
     frame_number = 0
     saved_frames = []
-
     max_frames = 10
 
     while True:
@@ -257,262 +366,195 @@ def extract_frames_from_video(video_path, frame_interval):
 
 def calculate_real_time(start_time, frame_number, fps):
     start_datetime = datetime.fromisoformat(start_time)
-
     elapsed_seconds = frame_number / fps
-
     real_time = start_datetime + timedelta(seconds=elapsed_seconds)
 
     return real_time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def predict_behavior(frame_path):
-    img = Image.open(frame_path).convert("RGB")
-    img = img.resize((224, 224))
-    img = np.array(img)
-    img = img.astype(np.float32)
-    img = img / 255.0
-    img = np.expand_dims(img, axis=0)
+def create_dashboard_context(selected_animal_id="all"):
+    available_animals = get_available_animals()
+    recent_logs = get_recent_logs()
+    behavior_timeline = get_behavior_timeline(selected_animal_id)
+    behavior_summary = get_behavior_summary(selected_animal_id)
+    animal_behavior_summary = get_animal_behavior_summary()
+    abnormal_message = analyze_abnormal_behavior(behavior_summary)
 
-    prediction = model.predict(img)
+    observation_prompt = create_observation_prompt(
+        behavior_summary,
+        abnormal_message,
+        animal_behavior_summary,
+        selected_animal_id
+    )
 
-    index = np.argmax(prediction)
-    confidence = prediction[0][index]
-
-    english_label = labels[index].split(" ", 1)[1]
-
-    label_map = {
-        "sleeping": "睡眠",
-        "eating": "食事",
-        "land_activity": "陸上活動",
-        "water_activity": "水中活動"
+    return {
+        "selected_animal_id": selected_animal_id,
+        "available_animals": available_animals,
+        "recent_logs": recent_logs,
+        "behavior_timeline": behavior_timeline,
+        "behavior_summary": behavior_summary,
+        "animal_behavior_summary": animal_behavior_summary,
+        "abnormal_message": abnormal_message,
+        "observation_prompt": observation_prompt,
+        "behavior_list": BEHAVIOR_LIST
     }
-
-    label = label_map[english_label]
-
-    return label, confidence
 
 
 @app.route("/")
 def index():
-    recent_logs = get_recent_logs()
-    behavior_timeline = get_behavior_timeline()
-    behavior_summary = get_behavior_summary()
-    animal_behavior_summary = get_animal_behavior_summary()
-    abnormal_message = analyze_abnormal_behavior(behavior_summary)
+    selected_animal_id = request.args.get("animal_id", "all")
+    message = request.args.get("message")
 
-    observation_prompt = create_observation_prompt(
-        behavior_summary,
-        abnormal_message,
-        animal_behavior_summary
+    context = create_dashboard_context(selected_animal_id)
+
+    if message:
+        context["message"] = message
+
+    return render_template("index.html", **context)
+
+
+@app.route("/image-session", methods=["POST"])
+def create_image_session():
+    animal_id = request.form["animal_id"]
+    start_time = request.form["start_time"]
+    interval_minutes = request.form["interval_minutes"]
+    images = request.files.getlist("images")
+
+    if animal_id.strip() == "":
+        context = create_dashboard_context("all")
+        context["message"] = "個体IDを入力してください。"
+        return render_template("index.html", **context)
+
+    if not interval_minutes.isdigit() or int(interval_minutes) < 0:
+        context = create_dashboard_context("all")
+        context["message"] = "画像間隔は0分以上の数値を入力してください。"
+        return render_template("index.html", **context)
+
+    if len(images) == 0 or images[0].filename == "":
+        context = create_dashboard_context("all")
+        context["message"] = "画像ファイルを選択してください。"
+        return render_template("index.html", **context)
+
+    start_datetime = datetime.fromisoformat(start_time)
+    interval_minutes = int(interval_minutes)
+    session_id = start_datetime.strftime("%Y%m%d%H%M%S")
+
+    logs = read_behavior_logs()
+
+    analyzed_count = 0
+    latest_label = ""
+
+    for index, image in enumerate(images):
+        if image.filename == "":
+            continue
+
+        image_path = os.path.join(
+            app.config["IMAGE_UPLOAD_FOLDER"],
+            image.filename
+        )
+
+        image.save(image_path)
+
+        label, confidence = predict_behavior(image_path)
+
+        observation_datetime = start_datetime + timedelta(
+            minutes=index * interval_minutes
+        )
+
+        log = {
+            "log_id": str(uuid.uuid4())[:8],
+            "session_id": session_id,
+            "datetime": observation_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+            "animal_id": animal_id,
+            "image_name": image.filename,
+            "behavior": label,
+            "confidence": round(float(confidence) * 100, 2)
+        }
+
+        logs.append(log)
+
+        analyzed_count += 1
+        latest_label = label
+
+    write_behavior_logs(logs)
+
+    message = f"{analyzed_count}枚の画像分析が完了しました。最新の判定結果：{latest_label}"
+
+    return redirect(
+        url_for(
+            "index",
+            animal_id=animal_id,
+            message=message
+        )
     )
 
-    return render_template(
-        "index.html",
-        recent_logs=recent_logs,
-        behavior_timeline=behavior_timeline,
-        behavior_summary=behavior_summary,
-        animal_behavior_summary=animal_behavior_summary,
-        abnormal_message=abnormal_message,
-        observation_prompt=observation_prompt
-    )
+
+@app.route("/update-behavior", methods=["POST"])
+def update_behavior():
+    log_id = request.form["log_id"]
+    new_behavior = request.form["behavior"]
+    selected_animal_id = request.form.get("selected_animal_id", "all")
+
+    logs = read_behavior_logs()
+
+    for log in logs:
+        if log["log_id"] == log_id:
+            log["behavior"] = new_behavior
+            log["confidence"] = "手動修正"
+            break
+
+    write_behavior_logs(logs)
+
+    return redirect(url_for("index", animal_id=selected_animal_id))
 
 
 @app.route("/clear-logs", methods=["POST"])
 def clear_logs():
-    log_path = "logs/behavior_log.csv"
+    if os.path.exists(LOG_PATH):
+        os.remove(LOG_PATH)
 
-    if os.path.exists(log_path):
-        os.remove(log_path)
+    for folder in [
+        app.config["IMAGE_UPLOAD_FOLDER"],
+        app.config["VIDEO_UPLOAD_FOLDER"],
+        app.config["FRAME_FOLDER"]
+    ]:
+        for filename in os.listdir(folder):
+            file_path = os.path.join(folder, filename)
 
-    for filename in os.listdir(app.config["VIDEO_UPLOAD_FOLDER"]):
-        file_path = os.path.join(
-            app.config["VIDEO_UPLOAD_FOLDER"],
-            filename
-        )
+            if os.path.isfile(file_path):
+                os.remove(file_path)
 
-        if os.path.isfile(file_path):
-            os.remove(file_path)
+    context = create_dashboard_context("all")
+    context["message"] = "現在の行動ログを削除しました。"
 
-    for filename in os.listdir(app.config["FRAME_FOLDER"]):
-        file_path = os.path.join(
-            app.config["FRAME_FOLDER"],
-            filename
-        )
-
-        if os.path.isfile(file_path):
-            os.remove(file_path)
-
-    return render_template(
-        "index.html",
-        message="現在の行動ログを削除しました。",
-        recent_logs=[],
-        behavior_timeline=[],
-        behavior_summary={
-            "睡眠": 0,
-            "食事": 0,
-            "陸上活動": 0,
-            "水中活動": 0
-        },
-        abnormal_message="十分な行動ログがありません。"
-    )
+    return render_template("index.html", **context)
 
 
 @app.route("/generate-report", methods=["POST"])
 def generate_report():
-    recent_logs = get_recent_logs()
-    behavior_timeline = get_behavior_timeline()
-    behavior_summary = get_behavior_summary()
-    animal_behavior_summary = get_animal_behavior_summary()
-    abnormal_message = analyze_abnormal_behavior(behavior_summary)
+    selected_animal_id = request.form.get("selected_animal_id", "all")
+    context = create_dashboard_context(selected_animal_id)
 
-    observation_prompt = create_observation_prompt(
-        behavior_summary,
-        abnormal_message,
-        animal_behavior_summary
-    )
-
-    if sum(behavior_summary.values()) > 0:
-        ai_report = generate_ai_report(
-            observation_prompt
+    if selected_animal_id == "all":
+        context["ai_report"] = None
+        context["message"] = "AI観察レポートを生成するには、個体IDを選択してください。"
+    elif sum(context["behavior_summary"].values()) > 0:
+        context["ai_report"] = generate_ai_report(
+            context["observation_prompt"]
         )
     else:
-        ai_report = None
+        context["ai_report"] = None
+        context["message"] = "選択された個体の行動ログがありません。"
 
-    return render_template(
-        "index.html",
-        recent_logs=recent_logs,
-        behavior_timeline=behavior_timeline,
-        behavior_summary=behavior_summary,
-        abnormal_message=abnormal_message,
-        observation_prompt=observation_prompt,
-        ai_report=ai_report,
-        animal_behavior_summary=animal_behavior_summary
-    )
+    return render_template("index.html", **context)
 
 
 @app.route("/session", methods=["POST"])
 def create_session():
-    animal_id = request.form["animal_id"]
+    context = create_dashboard_context("all")
+    context["message"] = "デモ環境ではサーバー負荷を考慮し、画像分析機能を公開しています。"
 
-    if animal_id.strip() == "":
-        return render_template(
-            "index.html",
-            message="個体IDを入力してください。",
-            recent_logs=get_recent_logs(),
-            behavior_timeline=get_behavior_timeline(),
-            behavior_summary=get_behavior_summary(),
-            abnormal_message=analyze_abnormal_behavior(
-                get_behavior_summary()
-            )
-        )
-
-    start_time = request.form["start_time"]
-    frame_interval = request.form["frame_interval"]
-
-    if not frame_interval.isdigit() or int(frame_interval) <= 0:
-        return render_template(
-            "index.html",
-            message="フレーム抽出間隔は1秒以上の数値を入力してください。",
-            recent_logs=get_recent_logs(),
-            behavior_timeline=get_behavior_timeline(),
-            behavior_summary=get_behavior_summary(),
-            animal_behavior_summary = get_animal_behavior_summary(),
-            abnormal_message=analyze_abnormal_behavior(get_behavior_summary())
-        )
-
-
-    video = request.files.get("video")
-
-    if video is None or video.filename == "":
-        return render_template(
-            "index.html",
-            message="動画ファイルを選択してください。",
-            recent_logs=get_recent_logs(),
-            behavior_timeline=get_behavior_timeline(),
-            behavior_summary=get_behavior_summary(),
-            animal_behavior_summary=get_animal_behavior_summary(),
-            abnormal_message=analyze_abnormal_behavior(get_behavior_summary())
-        )
-
-    video_path = os.path.join(
-        app.config["VIDEO_UPLOAD_FOLDER"],
-        video.filename
-    )
-
-    video.save(video_path)
-
-    saved_frames = extract_frames_from_video(
-        video_path,
-        frame_interval
-    )
-
-    log_path = "logs/behavior_log.csv"
-    file_exists = os.path.exists(log_path)
-
-    with open(log_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-
-        if not file_exists:
-            writer.writerow([
-                "datetime",
-                "animal_id",
-                "start_time",
-                "frame_number",
-                "behavior",
-                "confidence"
-            ])
-
-        for frame_info in saved_frames:
-            frame_path = frame_info["path"]
-            frame_number = frame_info["frame_number"]
-            fps = frame_info["fps"]
-
-            label, confidence = predict_behavior(frame_path)
-
-            real_time = calculate_real_time(
-                start_time,
-                frame_number,
-                fps
-            )
-
-            frame_filename = os.path.basename(frame_path)
-
-            writer.writerow([
-                real_time,
-                animal_id,
-                start_time,
-                frame_filename,
-                label,
-                round(float(confidence) * 100, 2)
-            ])
-
-    recent_logs = get_recent_logs()
-    behavior_timeline = get_behavior_timeline()
-    behavior_summary = get_behavior_summary()
-    animal_behavior_summary = get_animal_behavior_summary()
-    abnormal_message = analyze_abnormal_behavior(behavior_summary)
-
-    observation_prompt = create_observation_prompt(
-        behavior_summary,
-        abnormal_message,
-        animal_behavior_summary
-    )
-
-    return render_template(
-        "index.html",
-        message=f"観察セッションを作成しました。抽出フレーム数：{len(saved_frames)}枚",
-        animal_id=animal_id,
-        start_time=start_time,
-        frame_interval=frame_interval,
-        video_filename=video.filename,
-        frame_count=len(saved_frames),
-        recent_logs=recent_logs,
-        behavior_timeline=behavior_timeline,
-        behavior_summary=behavior_summary,
-        animal_behavior_summary=animal_behavior_summary,
-        abnormal_message=abnormal_message,
-        observation_prompt=observation_prompt
-    )
+    return render_template("index.html", **context)
 
 
 if __name__ == "__main__":
