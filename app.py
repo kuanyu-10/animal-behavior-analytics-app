@@ -10,9 +10,11 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import sys
 import uuid
+import random
 
 app = Flask(__name__)
 
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 load_dotenv()
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -36,10 +38,14 @@ os.makedirs(VIDEO_UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(FRAME_FOLDER, exist_ok=True)
 os.makedirs("logs", exist_ok=True)
 
-model = load_model("model/keras_model.h5")
+model = None
+labels = []
 
-with open("model/labels.txt", "r", encoding="utf-8") as f:
-    labels = [line.strip() for line in f.readlines()]
+if not DEMO_MODE:
+    model = load_model("model/keras_model.h5")
+
+    with open("model/labels.txt", "r", encoding="utf-8") as f:
+        labels = [line.strip() for line in f.readlines()]
 
 
 CSV_COLUMNS = [
@@ -289,6 +295,23 @@ def generate_ai_report(prompt):
 
 
 def predict_behavior(image_path):
+    if DEMO_MODE:
+        behavior_list = [
+            "睡眠",
+            "食事",
+            "陸上活動",
+            "水中活動"
+        ]
+
+        behavior = random.choice(behavior_list)
+
+        confidence = round(
+            random.uniform(82.0, 98.0),
+            1
+        )
+
+        return behavior, confidence
+
     img = Image.open(image_path).convert("RGB")
     img = img.resize((224, 224))
     img = np.array(img)
@@ -296,10 +319,13 @@ def predict_behavior(image_path):
     img = img / 255.0
     img = np.expand_dims(img, axis=0)
 
-    prediction = model.predict(img)
+    prediction = model.predict(
+        img,
+        verbose=0
+    )
 
     index = np.argmax(prediction)
-    confidence = prediction[0][index]
+    confidence = float(prediction[0][index])
 
     english_label = labels[index].split(" ", 1)[1]
 
@@ -461,6 +487,11 @@ def create_image_session():
             minutes=index * interval_minutes
         )
 
+        if DEMO_MODE:
+            confidence_score = confidence
+        else:
+            confidence_score = round(float(confidence) * 100, 2)
+
         log = {
             "log_id": str(uuid.uuid4())[:8],
             "session_id": session_id,
@@ -468,7 +499,7 @@ def create_image_session():
             "animal_id": animal_id,
             "image_name": image.filename,
             "behavior": label,
-            "confidence": round(float(confidence) * 100, 2)
+            "confidence": confidence_score
         }
 
         logs.append(log)
